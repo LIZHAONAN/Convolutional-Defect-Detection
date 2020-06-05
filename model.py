@@ -75,14 +75,33 @@ class UnifiedModel(nn.Module):
         ]
 
         self.encoder = nn.Sequential(*encoder_list)
-
-        # decoder_list = [
-        #     ConvBlock(in_dim=512, out_dim=16, kernel_size=window_size, pad=0),
-        #     ConvBlock(in_dim=16, out_dim=128, kernel_size=1, pad=0),
-        #     ConvBlock(in_dim=128, out_dim=num_class + 1, kernel_size=1, pad=0)
-        # ]
-
         self.decoder = ConvBlock(in_dim=512, out_dim = num_class + 1, kernel_size=window_size, pad=0)
+
+    def forward(self, x):
+        out = self.encoder(x)
+        out = self.decoder(out)
+        return out
+
+
+class UnifiedModelTiny(nn.Module):
+    def __init__(self, num_class, window_size=45):
+        super(UnifiedModelTiny, self).__init__()
+        self.window_size = window_size
+        self.num_class = num_class
+
+        encoder_list = [
+            ConvBlock(in_dim=1, out_dim=32, kernel_size=3, pad=1),
+            ResBlock(in_dim=32, out_dim=32, kernel_sizes=(1, 3), num_layers=1),
+            ConvBlock(in_dim=32, out_dim=64, kernel_size=3, pad=1),
+            ResBlock(in_dim=64, out_dim=64, kernel_sizes=(1, 3), num_layers=1),
+            ConvBlock(in_dim=64, out_dim=128, kernel_size=3, pad=1),
+            ResBlock(in_dim=128, out_dim=128, kernel_sizes=(1, 3), num_layers=1),
+            ConvBlock(in_dim=128, out_dim=256, kernel_size=3, pad=1),
+            ResBlock(in_dim=256, out_dim=256, kernel_sizes=(1, 3), num_layers=1),
+        ]
+
+        self.encoder = nn.Sequential(*encoder_list)
+        self.decoder = ConvBlock(in_dim=256, out_dim = num_class + 1, kernel_size=window_size, pad=0)
 
     def forward(self, x):
         out = self.encoder(x)
