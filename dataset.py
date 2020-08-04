@@ -15,15 +15,15 @@ import math
 
 
 class CSVDataset(Dataset):
-    def __init__(self, path_to_csv, window_size=64, non_pos_ratio=7, pos_per_image=8, num_class=2,
+    def __init__(self, path_to_csv, window_size=64, non_pos_ratio=7, num_class=2,
                  method='mixed', transform=None, multiscale=True, shuffle=True):
         assert (method in ['hard', 'uniform', 'mixed'])
         self.df = pd.read_csv(path_to_csv, sep=',')
-        self.img_paths = self.df['path'].unique()
+        # self.img_paths = self.df['path'].unique()
 
         self.window_size = window_size
         self.non_pos_ratio = non_pos_ratio
-        self.pos_per_image = pos_per_image
+        # self.pos_per_image = pos_per_image
         self.num_class = num_class
         self.method = method
         self.multiscale = multiscale
@@ -31,29 +31,33 @@ class CSVDataset(Dataset):
         self.shuffle = shuffle
 
     def __len__(self):
-        return len(self.img_paths)
+        return len(self.df)
 
     def __getitem__(self, index):
         # load image
-        img_path = self.img_paths[index]
+        lbl = self.df.iloc[index]
+        img_path = lbl.path
         img = Image.open(img_path).convert('L')
         w, h = img.size
-        # load labels
-        lbl = self.df[self.df['path'] == img_path]
-        lbl = lbl[['x', 'y', 'class']].values
+        # load defect's position and class
+        pos = lbl[['x', 'y', 'class']].values
+        pos = pos.reshape(1, 3).astype(float)
 
         # sample true positive from labels
-        pos_mask = np.random.choice(lbl.shape[0], self.pos_per_image)
-        pos = np.zeros((self.pos_per_image, 3))  # [x, y, classes]
+        # pos_mask = np.random.choice(lbl.shape[0], self.pos_per_image)
+        # pos = np.zeros((self.pos_per_image, 3))  # [x, y, classes]
 
-        pos[:, :2] = lbl[pos_mask, :2]  # x and y
-        pos[:, 2] = lbl[pos_mask, 2]
+        # pos[:, :2] = lbl[pos_mask, :2]  # x and y
+        # pos[:, 2] = lbl[pos_mask, 2]
         #         pos[np.arange(pos.shape[0]), 2 + lbl[pos_mask, 2].astype(int)] = 1
         # sample non positive
-        non_pos = np.zeros((self.non_pos_ratio * self.pos_per_image, 3))
+        non_pos = np.zeros((self.non_pos_ratio, 3))
         for idx, _ in enumerate(non_pos):
-            selected = None if self.method == 'uniform' else pos
-            non_pos[idx, :2] = sample_nonobj_from_image(lbl, selected, self.method)
+            selected = None
+            if self.method != 'uniform':
+                selected = self.df[self.df['path'] == img_path][['x', 'y', 'class']].values
+                selected = selected[:, :2]
+            non_pos[idx, :2] = sample_nonobj_from_image(selected, selected, self.method)
             non_pos[idx, 2] = self.num_class
 
         # shuffle the labeled data
@@ -61,7 +65,6 @@ class CSVDataset(Dataset):
         if self.shuffle:
             np.random.shuffle(res)
 
-        #         images = torch.FloatTensor(res.shape[0], self.window_size, self.window_size).fill_(0)
         images = []
         for idx, label in enumerate(res):
             x, y = label[:2]
@@ -85,6 +88,7 @@ class CSVDataset(Dataset):
 
             if self.transform:
                 raw_img = self.transform(raw_img)
+            raw_img = transforms.Resize(size=(self.window_size, self.window_size))(raw_img)
             raw_img = transforms.ToTensor()(raw_img)
             images += [raw_img.unsqueeze(0)]
 
