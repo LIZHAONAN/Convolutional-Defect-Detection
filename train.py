@@ -19,9 +19,8 @@ import time
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--epochs", type=int, default=150, help="number of epochs")
+parser.add_argument("--epochs", type=int, default=80, help="number of epochs")
 parser.add_argument("--trainset", type=str, required=True, help="path to .csv file specifying train dataset")
-parser.add_argument("--testset", type=str, default=None, help="path to .csv file specifying test dataset")
 parser.add_argument("--testset", type=str, default=None, help="path to .csv file specifying test dataset")
 parser.add_argument("--batch_size", type=int, default=8, help="size of each image batch")
 parser.add_argument("--non_pos_ratio", type=int, default=7, help="non positive ratio in the dataset")
@@ -77,6 +76,9 @@ print('-- finished loading')
 
 optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, weight_decay=5e-5)
 
+lr_train = lambda e: np.power(0.5, int(e / 20))
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_train)
+
 weight = torch.ones(opt.num_class + 1)
 weight[-1] = opt.non_pos_ratio * 2
 criterion = nn.CrossEntropyLoss(weight=weight)
@@ -84,6 +86,7 @@ criterion.to(device)
 
 if __name__ == '__main__':
     for epoch in range(opt.epochs):
+        print("epoch {} | learning rate = {}".format(epoch, "{0:.6f}".format(optimizer.param_groups[0]['lr'])))
         for batch_i, (images, labels) in enumerate(dataloader):
             model.train()
             model.zero_grad()
@@ -99,13 +102,14 @@ if __name__ == '__main__':
 
             print("epoch {} batch {}, loss = {}".format(epoch, batch_i, loss.item()))
 
+        scheduler.step()
         path = 'models/unified_pretrain_{}.pth'.format(epoch)
         print("saving model at {}".format(path))
         torch.save(model.module.state_dict(), path)
         print("model saved\n")
 
         # test
-        if opt.testset is not None:
+        if opt.testset is not None and epoch % 5 == 0:
             print("-- testing on {}".format(opt.testset))
 
             df_test_labl = pd.read_csv(opt.testset)
@@ -120,7 +124,7 @@ if __name__ == '__main__':
                 img = transforms.ToTensor()(img)
                 img = img.to(device)
 
-                f, c = math.ceil(opt.window / 2) - 1, math.floor(opt.window / 2)
+                f, c = math.ceil(64 / 2) - 1, math.floor(64 / 2)
                 img = F.pad(img, (f, c, f, c))
 
                 with torch.no_grad():
@@ -155,12 +159,16 @@ if __name__ == '__main__':
             df_test_pred['y'] = 1 - df_test_pred['y']
             df_test_pred['detected'] = 0
 
-            print('-- epoch = {}, evaluating predictions'.format(epoch))
+            print('-- evaluating predictions at epoch = %d' % epoch)
+            dis = evaluate_detection(df_test_labl, df_test_pred)
+
+            print('-- average distance = %.5f' % dis)
             for mode in ['pos', 'neg', 'total']:
                 df_test_pred_cp = df_test_pred.copy()
                 df_test_labl_cp = df_test_labl.copy()
-                df_test_pred_cp['detected'] = 0
-                df_test_labl_cp['detected'] = 0
+                # df_test_pred_cp['detected'] = 0
+                # df_test_labl_cp['detected'] = 0
+
                 get_stats(df_test_pred_cp, df_test_labl_cp, mode)
 
 
