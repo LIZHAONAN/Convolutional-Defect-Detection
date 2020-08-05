@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision import transforms
 from torch.autograd import Variable
+from skimage.feature import peak_local_max
 
 
 import numpy as np
@@ -20,6 +21,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--epochs", type=int, default=150, help="number of epochs")
 parser.add_argument("--trainset", type=str, required=True, help="path to .csv file specifying train dataset")
+parser.add_argument("--testset", type=str, default=None, help="path to .csv file specifying test dataset")
 parser.add_argument("--testset", type=str, default=None, help="path to .csv file specifying test dataset")
 parser.add_argument("--batch_size", type=int, default=8, help="size of each image batch")
 parser.add_argument("--non_pos_ratio", type=int, default=7, help="non positive ratio in the dataset")
@@ -73,7 +75,7 @@ dataloader = DataLoader(
 )
 print('-- finished loading')
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=5e-5)
+optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, weight_decay=5e-5)
 
 weight = torch.ones(opt.num_class + 1)
 weight[-1] = opt.non_pos_ratio * 2
@@ -101,4 +103,68 @@ if __name__ == '__main__':
         print("saving model at {}".format(path))
         torch.save(model.module.state_dict(), path)
         print("model saved\n")
+
+        # test
+        if opt.testset is not None:
+            print("-- testing on {}".format(opt.testset))
+
+            df_test_labl = pd.read_csv(opt.testset)
+            df_test_pred = pd.DataFrame(columns=[
+                'path', 'class', 'x', 'y'
+            ])
+
+            for path in df_test_labl['path'].unique():
+                img = Image.open(path).convert('L')
+                w, h = img.size
+
+                img = transforms.ToTensor()(img)
+                img = img.to(device)
+
+                f, c = math.ceil(opt.window / 2) - 1, math.floor(opt.window / 2)
+                img = F.pad(img, (f, c, f, c))
+
+                with torch.no_grad():
+                    model.eval()
+                    pred = model(img.unsqueeze(0)).squeeze()
+                    pred = torch.softmax(pred, dim=0).cpu()
+
+                pred_pos = pred[0, :, :]
+                pred_neg = pred[1, :, :]
+
+                pred_pos *= pred.argmax(dim=0) == 0
+                pred_neg *= pred.argmax(dim=0) == 1
+
+                pos = peak_local_max(pred_pos.detach().cpu().numpy(), min_distance=12, threshold_abs=0.3,
+                                     threshold_rel=0.25).astype(np.float)
+                neg = peak_local_max(pred_neg.detach().cpu().numpy(), min_distance=12, threshold_abs=0.3,
+                                     threshold_rel=0.25).astype(np.float)
+
+                pos = np.array([[0, y/h, x/w] for x, y in pos])
+                neg = np.array([[1, y/h, x/w] for x, y in neg])
+
+                if pos.size == 0:
+                    pos = np.array([]).reshape(0, 3)
+                if neg.size == 0:
+                    neg = np.array([]).reshape(0, 3)
+
+                df_pred = pd.DataFrame(np.vstack((pos, neg)), columns=['class', 'x', 'y'])
+                df_pred['path'] = path
+                df_test_pred = df_test_pred.append(df_pred, sort=True)
+
+            # convert y to 1 - y for comparison
+            df_test_pred['y'] = 1 - df_test_pred['y']
+            df_test_pred['detected'] = 0
+
+            print('-- epoch = {}, evaluating predictions'.format(epoch))
+            for mode in ['pos', 'neg', 'total']:
+                df_test_pred_cp = df_test_pred.copy()
+                df_test_labl_cp = df_test_labl.copy()
+                df_test_pred_cp['detected'] = 0
+                df_test_labl_cp['detected'] = 0
+                get_stats(df_test_pred_cp, df_test_labl_cp, mode)
+
+
+
+
+
 

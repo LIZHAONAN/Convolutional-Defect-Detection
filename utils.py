@@ -61,6 +61,63 @@ def sample_nonobj_from_image(labels, selected_labels=None, method='mixed'):
             return x, y
 
 
+def evaluate_detection(df_labl, df_pred, path_range=None, thres=0.02):
+    dis = []
+
+    if path_range is None:
+        path_range = df_labl['path'].unique()
+
+    for path in path_range:
+        # class [pos, neg]
+        for c in [0, 1]:
+            df_cur_labl = df_labl[(df_labl['path'] == path) & (df_labl['class'] == c)]
+            df_cur_pred = df_pred[(df_pred['path'] == path) & (df_pred['class'] == c)]
+
+            # [label index, prediction index, distance]
+            cur_dis = np.array([[i, j, np.sqrt((l['x'] - p['x']) ** 2 + (l['y'] - p['y']) ** 2)]
+                                for i, l in df_cur_labl.iterrows()
+                                for j, p in df_cur_pred.iterrows()])
+
+            visited_pred = []
+            visited_labl = []
+            for index in np.argsort(cur_dis[:, 2]):
+                # break if current distance is greater than the threshold
+                if cur_dis[index, 2] >= thres:
+                    break
+
+                cur_labl_idx = int(cur_dis[index, 0])
+                cur_pred_idx = int(cur_dis[index, 1])
+
+                if (cur_labl_idx not in visited_labl) and (cur_pred_idx not in visited_pred):
+                    dis.append(cur_dis[index, 2])
+                    visited_pred.append(cur_pred_idx)
+                    visited_labl.append(cur_labl_idx)
+
+                    df_pred.at[cur_pred_idx, 'detected'] = 1
+                    df_labl.at[cur_labl_idx, 'detected'] = 1
+
+    return np.mean(dis)
+
+def get_stats(pred, labl, mode='total'):
+    if mode == 'pos':
+        pred = pred[pred['class'] == 0].copy()
+        labl = labl[labl['class'] == 0].copy()
+    elif mode == 'neg':
+        pred = pred[pred['class'] == 1].copy()
+        labl = labl[labl['class'] == 1].copy()
+
+    total_pred = len(pred)
+    total_labl = len(labl)
+    correct_pred = len(pred[(pred['detected'] == 1)])
+    correct_labl = len(labl[(labl['detected'] == 1)])
+    recall = correct_labl / total_labl
+    precision = correct_pred / total_pred
+
+    print('mode = {}'.format(mode))
+    print('recall = %.3f ' % recall)
+    print('precision = %.3f' % precision)
+    print('F1 score = %.3f' % (2 * recall * precision / (recall + precision)))
+
 # def detect_image(model, image):
 #     model.train(False)
 #     window_size = model.window_size
