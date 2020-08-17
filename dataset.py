@@ -365,3 +365,174 @@ class RecurrentCSVDataset(Dataset):
         labels = torch.cat(labels, 0)
 
         return images, labels
+
+
+class OrientationPretrainDataset(Dataset):
+    def __init__(self, window_size, transform=None, length=64, cls='mixed'):
+        assert cls in ['mixed', 'pos', 'neg']
+        self.window_size = window_size
+        self.transform = transform
+        self.len = length
+        self.cls = cls
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, index):
+        w = self.window_size
+        if self.cls == 'mixed':
+            cls = np.random.randint(2, size=1)[0]
+        elif self.cls == 'pos':
+            cls = 0
+        elif self.cls == 'neg':
+            cls = 1
+        theta = np.random.random() * 2 * np.pi
+        #         if cls == 1:
+        #             theta = theta % (2 / 3 * np.pi)
+
+        img = np.ones((w, w)) * np.random.random()
+        lbl = np.array([cls, theta])
+
+        if cls == 1:
+            self.draw_line(img, theta)
+            self.draw_line(img, theta + np.pi * 2 / 3)
+            self.draw_line(img, theta + np.pi * 4 / 3)
+        else:
+            self.draw_line(img, theta)
+
+        self.random_block(img)
+
+        img = torch.from_numpy(img).unsqueeze(0).unsqueeze(0).float()
+        lbl = torch.from_numpy(lbl).unsqueeze(0).float()
+
+        return img, lbl
+
+    def draw_line(self, img, theta):
+        l = np.random.random() * 0.9  # intensity of line
+        r = np.random.random() / 4 + 0.25  # length of line
+        w = np.random.choice([1, 3, 5], 1)[0]
+        x1 = int(0.5 * self.window_size)
+        x2 = x1 + int(self.window_size * r * np.sin(theta))
+        y1 = int(0.5 * self.window_size)
+        y2 = y1 + int(self.window_size * r * np.cos(theta))
+
+        for x in range(min(x1, x2), max(x1, x2)):
+            y_start = y1 + int((x - x1) / (x2 - x1) * (y2 - y1))
+            y_min = max(0, y_start - w // 2)
+            y_max = min(self.window_size - 1, y_start + w // 2)
+            for y in range(y_min, y_max + 1):
+                img[y, x] = l + np.random.random() * 0.1
+
+        for y in range(min(y1, y2), max(y1, y2)):
+            x_start = x1 + int((y - y1) / (y2 - y1) * (x2 - x1))
+            x_min = max(0, x_start - w // 2)
+            x_max = min(self.window_size - 1, x_start + w // 2)
+            for x in range(x_min, x_max + 1):
+                img[y, x] = l + np.random.random() * 0.1
+
+    def random_block(self, img, num=5):
+        n = np.random.choice(num, 1)[0]
+        for i in range(n):
+            l = np.random.random() * 0.9
+            x = int(self.window_size * np.random.random())
+            y = int(self.window_size * np.random.random())
+            w = int(self.window_size * np.random.random() * 0.2)
+            h = int(self.window_size * np.random.random() * 0.2)
+            x_min, x_max = max(0, x - w // 2), min(self.window_size - 1, x + w // 2)
+            y_min, y_max = max(0, y - h // 2), min(self.window_size - 1, y + h // 2)
+            for i in range(x_min, x_max + 1):
+                for j in range(y_min, y_max + 1):
+                    img[j, i] = l + np.random.random() * 0.9
+
+    def collate_fn(self, batch):
+        images, labels = zip(*batch)
+
+        images = torch.cat(images, 0)
+        labels = torch.cat(labels, 0)
+
+        return images, labels
+
+
+class OrientationDataset(Dataset):
+    def __init__(self, path_to_csv, window_size=64, num_class=2,
+                 transform=None, multiscale=True, shuffle=True, cls='mixed'):
+        assert cls in ['mixed', 'pos', 'neg']
+        self.df = pd.read_csv(path_to_csv, sep=',')
+        if cls == 'pos':
+            self.df = self.df[self.df['class'] == 0].copy()
+        elif cls == 'neg':
+            self.df = self.df[self.df['class'] == 1].copy()
+
+        self.window_size = window_size
+
+        self.num_class = num_class
+        self.multiscale = multiscale
+        self.transform = transform
+        self.shuffle = shuffle
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, index):
+        # load image
+        lbl = self.df.iloc[index]
+        img_path = lbl.path
+        img = Image.open(img_path).convert('L')
+        w, h = img.size
+        # load defect's position and class
+        pos = lbl[['x', 'y', 'class', 'theta']].values
+        pos = pos.reshape(1, 4).astype(float)
+
+        # shuffle the labeled data
+        res = pos
+        if self.shuffle:
+            np.random.shuffle(res)
+
+        images = []
+
+        x, y = res[0, :2]
+
+        y = 1 - y
+
+        x = int(x * w)
+        y = int(y * h)
+
+        window_size = self.window_size
+        if self.multiscale:
+            window_size = int(np.random.uniform(low=0.8, high=2) * window_size)
+
+        box = [max(0, x - math.floor(window_size / 2)), max(0, y - math.floor(window_size / 2)),
+               min(w, x + math.ceil(window_size / 2)), min(h, y + math.ceil(window_size / 2))]
+
+        raw_img = Image.new('RGB', (window_size, window_size)).convert('L')
+        raw_img.paste(img.crop(box), (
+            math.floor(window_size / 2) - x + box[0],
+            math.floor(window_size / 2) - y + box[1]))
+
+        if self.transform:
+            raw_img = self.transform(raw_img)
+
+        if np.random.random() < 0.5:
+            angle = random.randint(-15, 15)
+            if angle < 0:
+                angle = 360 - angle
+            raw_img = TF.rotate(raw_img, angle)
+            res[0, -1] += angle * (np.pi / 180)
+            res[0, -1] = res[0, -1] % (2 * np.pi)
+
+        if res[0, -2] == 1:
+            res[0, -1] = res[0, -1] % (2 / 3 * np.pi)
+
+        raw_img = transforms.Resize(size=(self.window_size, self.window_size))(raw_img)
+        raw_img = transforms.ToTensor()(raw_img)
+        images += [raw_img.unsqueeze(0)]
+
+        return torch.cat(images, dim=0).float(), torch.from_numpy(res[:, 2:]).float()
+
+    def collate_fn(self, batch):
+        images, labels = zip(*batch)
+
+        images = torch.cat(images, 0)
+        labels = torch.cat(labels, 0)
+
+        return images, labels

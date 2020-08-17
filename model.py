@@ -10,7 +10,6 @@ from torch.nn import init
 from utils import *
 from block import *
 
-
 # convolution with batch norm
 class ConvBlock(nn.Module):
     def __init__(self, in_dim, out_dim, kernel_size, pad, stride=1, activation=True, attn=False):
@@ -140,6 +139,85 @@ class UnifiedModelTiny(nn.Module):
         out = self.encoder(x)
         out = self.decoder(out)
         return out
+
+
+class OrientationModel(nn.Module):
+    def __init__(self, num_dim=3, window_size=64):
+        super(OrientationModel, self).__init__()
+        self.window_size = window_size
+        self.num_dim = num_dim
+
+        #         encoder_list = [
+        #             ConvBlock(in_dim=1, out_dim=32, kernel_size=3, pad=1),
+        #             ResBlock(in_dim=32, out_dim=32, kernel_sizes=(1, 3), num_layers=1),
+        #             ConvBlock(in_dim=32, out_dim=64, kernel_size=3, pad=1),
+        #             ResBlock(in_dim=64, out_dim=64, kernel_sizes=(1, 3), num_layers=1),
+        #             ConvBlock(in_dim=64, out_dim=128, kernel_size=3, pad=1),
+        #             ResBlock(in_dim=128, out_dim=128, kernel_sizes=(1, 3), num_layers=1),
+        #             ConvBlock(in_dim=128, out_dim=256, kernel_size=3, pad=1),
+        #             ResBlock(in_dim=256, out_dim=256, kernel_sizes=(1, 3), num_layers=1),
+        #             ConvBlock(in_dim=256, out_dim=512, kernel_size=3, pad=1)
+        #         ]
+
+        #         self.encoder = nn.Sequential(*encoder_list)
+        #         self.decoder = ConvBlock(in_dim=512, out_dim=num_dim, kernel_size=window_size, pad=0)
+
+        #         fc_list = [
+        #             ConvBlock(in_dim=num_dim, out_dim=512, kernel_size=1, pad=0),
+        #             ConvBlock(in_dim=512, out_dim=1, kernel_size=1, pad=0)
+        #         ]
+        #         self.fc = nn.Sequential(*fc_list)
+
+        layers = [
+            ConvBlock(in_dim=1, out_dim=32, kernel_size=3, pad=1),
+            ResBlock(in_dim=32, out_dim=32, kernel_sizes=(1, 3), num_layers=1),
+            nn.MaxPool2d(2, stride=2),
+            ConvBlock(in_dim=32, out_dim=64, kernel_size=3, pad=1),
+            ResBlock(in_dim=64, out_dim=64, kernel_sizes=(1, 3), num_layers=1),
+            nn.MaxPool2d(2, stride=2),
+            ConvBlock(in_dim=64, out_dim=128, kernel_size=3, pad=1),
+            ResBlock(in_dim=128, out_dim=128, kernel_sizes=(1, 3), num_layers=1),
+            nn.MaxPool2d(2, stride=2),
+            ConvBlock(in_dim=128, out_dim=256, kernel_size=3, pad=1),
+            ResBlock(in_dim=256, out_dim=256, kernel_sizes=(1, 3), num_layers=1),
+            nn.MaxPool2d(2, stride=2),
+            ConvBlock(in_dim=256, out_dim=512, kernel_size=3, pad=1),
+            ResBlock(in_dim=512, out_dim=512, kernel_sizes=(1, 3), num_layers=1),
+            nn.MaxPool2d(2, stride=2),
+            ConvBlock(in_dim=512, out_dim=1024, kernel_size=3, pad=1),
+            ResBlock(in_dim=1024, out_dim=1024, kernel_sizes=(1, 3), num_layers=1),
+            nn.MaxPool2d(2, stride=2),
+            ConvBlock(in_dim=1024, out_dim=1024, kernel_size=3, pad=1),
+            ResBlock(in_dim=1024, out_dim=1024, kernel_sizes=(1, 3), num_layers=1),
+        ]
+
+        self.net = nn.Sequential(*layers)
+        self.fc = ConvBlock(in_dim=2048, out_dim=1, kernel_size=1, pad=0)
+
+    def forward(self, x):
+        #         pi = torch.acos(torch.zeros(1)).item() * 2
+
+        #         out = self.encoder(x)
+        #         out = self.decoder(out)
+        #         out = self.fc(out)
+
+        out = self.net(x)
+        out = self.fc(out)
+
+        return out
+
+    # initialize weights from detection model instead of randomly initialize
+    def load_from_weights(self, path):
+        print('-- loading detection model weights from {}'.format(path))
+        own_state = self.state_dict()
+        det_state = torch.load(path)
+        for name in det_state:
+            param = det_state[name]
+            if name not in own_state:
+                print('skipping {} in the detection model'.format(name))
+                continue
+            own_state[name].copy_(param)
+        print('-- finished loading')
 
 
 class TrackingConditionedModel(nn.Module):
